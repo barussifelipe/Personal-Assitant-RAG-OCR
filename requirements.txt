@@ -1,0 +1,14 @@
+torch==2.6.0+cu118 --index-url https://download.pytorch.org/whl/cu118
+torchvision
+transformers==4.46.3
+tokenizers==0.20.3
+einops
+addict 
+easydict
+pillow
+qdrant_client
+numpy 
+pdf2image
+ollama
+psutil
+opencv-python
