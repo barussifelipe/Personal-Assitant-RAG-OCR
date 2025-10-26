@@ -1,2 +1,9 @@
 #Virtual environment
-"venv/" 
+venv
+composal
+
+#Cloned Reps
+flash-attention
+
+#Local Config
+.vscode
