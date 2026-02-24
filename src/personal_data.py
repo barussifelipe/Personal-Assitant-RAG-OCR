@@ -1,10 +1,7 @@
-from qdrant_client import QdrantClient 
-import ollama
 import os
 import tempfile
 import numpy as np
 import pdf2image
-from PIL import Image
 from transformers import AutoTokenizer, AutoModel
 import torch 
 import cv2 as opencv
@@ -18,7 +15,7 @@ import cv2 as opencv
 
 #Since EmbeddingGemma is text-only, we will need to convert any non-text data into text format before embedding.
 
-qdrant_client = QdrantClient(url="http://localhost:6333")
+
 output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Output")
 
 def pdf_to_images(pdf_path, poppler_path):
