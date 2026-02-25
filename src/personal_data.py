@@ -2,7 +2,7 @@ import os
 import tempfile
 import numpy as np
 import pdf2image
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoProcessor, AutoModelForImageTextToText
 import torch 
 import cv2 as opencv
 
@@ -26,109 +26,106 @@ def pdf_to_images(pdf_path, poppler_path):
         print(f"Error converting PDF to images: {e}")
         return [] 
 
-def side_padding(image, desired_width, fill_color=(0, 0, 0)):
-    width = image.shape[1]
-    if width >= desired_width:
-        return image
-    total_padding = desired_width - width
-    left_padding = total_padding // 2
-    right_padding = total_padding - left_padding
-    padded_image = opencv.copyMakeBorder(image, 0, 0, left_padding, right_padding, opencv.BORDER_CONSTANT, value=fill_color)
-    return padded_image
-
 
 def load_ocr_model():
-    """Load the OCR model and tokenizer once."""
-    model_name = 'deepseek-ai/DeepSeek-OCR'
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModel.from_pretrained(
+    """Load the GLM-OCR model and processor once."""
+    model_name = 'zai-org/GLM-OCR'
+    processor = AutoProcessor.from_pretrained(model_name)
+    model = AutoModelForImageTextToText.from_pretrained(
         model_name,
-        attn_implementation="eager",
-        trust_remote_code=True,
-        use_safetensors=True,
-        torch_dtype=torch.bfloat16,
-        device_map="cuda"
+        torch_dtype="auto",
+        device_map="auto",
     )
-    model = model.eval()
-    return model, tokenizer
+    return model, processor
 
 
-def ocr_on_image(model, tokenizer, image_path, page_output_path):
-    """Run OCR on a single image file using an already-loaded model.
+def ocr_on_image(model, processor, image_path, page_output_path):
+    """Run OCR on a single image file using GLM-OCR.
     
     Args:
+        model: The loaded GLM-OCR model.
+        processor: The loaded GLM-OCR processor.
         image_path: Path (string) to the image file on disk.
         page_output_path: Directory where this page's result.mmd will be saved.
     
     Returns:
         The extracted markdown text, or None on failure.
     """
-    prompt = "<image>\n<|grounding|>Convert the document to markdown. "
     try:
-        model.infer(tokenizer, prompt=prompt, image_file=image_path, output_path=page_output_path, base_size=1024, image_size=640, crop_mode=True, save_results=True, test_compress=True)
-        
-        # infer() saves to result.mmd but returns None — read it back
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "url": image_path},
+                    {"type": "text", "text": "Text Recognition:"},
+                ],
+            }
+        ]
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        ).to(model.device)
+        inputs.pop("token_type_ids", None)
+
+        generated_ids = model.generate(**inputs, max_new_tokens=8192)
+        text = processor.decode(
+            generated_ids[0][inputs["input_ids"].shape[1]:],
+            skip_special_tokens=False,
+        )
+
+        # Save result
+        os.makedirs(page_output_path, exist_ok=True)
         mmd_path = os.path.join(page_output_path, "result.mmd")
-        if os.path.exists(mmd_path):
-            with open(mmd_path, "r", encoding="utf-8") as f:
-                return f.read()
-        return None
+        with open(mmd_path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+        return text
     except Exception as e:
         print(f"Error during OCR: {e}")
         return None
-        
-
-
 
 
 if __name__ == "__main__":
     poppler_path = r"C:\poppler\Library\bin"
-    pdf_path = r"C:\Users\benga\Documents\Documentos\Programming\PYTHON\Personal_Assistant\src\Input\relatorio-felipe-barussi.pdf"
-
-    images = pdf_to_images(pdf_path, poppler_path)
-    print(f"Converted PDF to {len(images)} images.")
-
-    # Load model ONCE before the loop
+     # Load model ONCE before the loop
     print("Loading OCR model...")
-    model, tokenizer = load_ocr_model()
+    model, processor = load_ocr_model()
+    for file in os.listdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Input")):
+        if file.lower().endswith(".pdf"):
+            source_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Input", file)
 
-    # Create a temp directory for padded images
-    temp_dir = tempfile.mkdtemp(prefix="ocr_")
-    os.makedirs(output_path, exist_ok=True)
+            images = pdf_to_images(source_path, poppler_path)
+            print(f"Converted PDF to {len(images)} images.")
 
-    results = []
-    for i, img in enumerate(images):
-        print(f"Performing OCR on image {i+1}/{len(images)}...")
-        try:
-            opencv_image = opencv.cvtColor(np.array(img), opencv.COLOR_RGB2BGR)
-            model_image = side_padding(opencv_image, desired_width=1024, fill_color=(0, 0, 0))
+        
+            # Create a temp directory for page images
+            temp_dir = tempfile.mkdtemp(prefix="ocr_")
 
-            # Save padded image to a temp file (infer() expects a file path)
-            temp_path = os.path.join(temp_dir, f"page_{i+1}.jpg")
-            opencv.imwrite(temp_path, model_image)
+            file_path = os.path.join(output_path, file)
+            os.makedirs(file_path, exist_ok=True)
 
-            # Each page gets its own output dir so result.mmd isn't overwritten
-            page_output = os.path.join(output_path, f"page_{i+1}")
-            os.makedirs(page_output, exist_ok=True)
+            for i, img in enumerate(images):
+                print(f"Performing OCR on image {i+1}/{len(images)}...")
+                try:
+                    opencv_image = opencv.cvtColor(np.array(img), opencv.COLOR_RGB2BGR)
 
-            text = ocr_on_image(model, tokenizer, temp_path, page_output)
-            if text is not None:
-                results.append(text)
-                print(f"Page {i+1} saved to {page_output}/result.mmd")
-        except Exception as e:
-            print(f"Error processing image {i+1}: {e}")
-            continue
+                    # Save image to a temp file
+                    temp_path = os.path.join(temp_dir, f"page_{i+1}.jpg")
+                    opencv.imwrite(temp_path, opencv_image)
 
-    # Combine all pages into a single markdown file
-    if results:
-        combined_path = os.path.join(output_path, "full_document.md")
-        with open(combined_path, "w", encoding="utf-8") as f:
-            for i, page_text in enumerate(results):
-                f.write(f"\n\n<!-- Page {i+1} -->\n\n")
-                f.write(page_text)
-        print(f"Full document saved to {combined_path}")
+                    # Each page gets its own output dir
+                    page_output = os.path.join(file_path, f"page_{i+1}")
 
-    print(f"OCR completed. Processed {len(results)}/{len(images)} pages successfully.")
+                    text = ocr_on_image(model, processor, temp_path, page_output)
+                    if text is not None:
+                        print(f"Page {i+1} saved to {page_output}/result.mmd")
+                except Exception as e:
+                    print(f"Error processing image {i+1}: {e}")
+                    continue
+        print(f"OCR completed. Processed {len(images)}/{len(images)} pages successfully.")
   
             
 
