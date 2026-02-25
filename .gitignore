@@ -2,10 +2,12 @@
 venv
 composal
 
-#Cloned Reps
-flash-attention
 
 #Local Config
 .vscode
 
 deepseek-models
+
+src/Output 
+
+src/qdrant_data
